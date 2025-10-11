@@ -39,6 +39,19 @@ The "Alpha board" connects to four Bravo boards to control four computers over a
 
 ![alpha_board_pcb_design.png](.github/images/alpha_board_pcb_design.png)
 
+## Connecting Everything
+
+This is how the complement OOB Management solution is wired.
+
+
+Drawing of how the Alpha board connects to Bravo boards.
+
+![oob_overview.excalidraw.png](.github/images/oob_overview.excalidraw.png)
+
+Drawing of the entire Out-of-Band Management wiring and setup.
+
+![oob_extra_components.excalidraw.png](.github/images/oob_extra_components.excalidraw.png)
+
 ## Software
 
 [Micropython](https://micropython.org/) is used on the ESP32-C3 to control everything.
