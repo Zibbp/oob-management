@@ -1,0 +1,223 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Out-of-Band Management</title>
+  <link rel="icon" href="data:," />
+  <style>
+    :root {
+      --bg: #f4f4f9;
+      --fg: #333;
+      --card: #fff;
+      --muted: #666;
+    }
+
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      background: var(--bg);
+      margin: 0;
+      padding: 20px;
+      color: var(--fg);
+    }
+
+    h1 {
+      text-align: center;
+      margin: 0 0 16px;
+    }
+
+    #notif {
+      text-align: center;
+      margin: 10px 0;
+      font-size: 1.05em;
+      min-height: 24px;
+      font-weight: 600;
+      color: #0a7d2b;
+    }
+
+    .pc-card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 15px;
+      margin: 15px auto;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, .08);
+      width: 320px;
+    }
+
+    .pc-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      gap: 8px;
+    }
+
+    .pc-title input {
+      border: none;
+      font-size: 1.05em;
+      font-weight: 700;
+      width: 100%;
+      background: transparent;
+      outline: none;
+    }
+
+    .status {
+      margin: 6px 0;
+      font-size: 1.1em;
+    }
+
+    button {
+      margin: 6px 6px 0 0;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      transition: opacity .15s;
+    }
+
+    button:hover {
+      opacity: .9;
+    }
+
+    .btn-on {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .btn-off {
+      background: #f44336;
+      color: white;
+    }
+
+    .btn-rst {
+      background: #2196F3;
+      color: white;
+    }
+
+    .section {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 15px;
+      margin: 15px auto;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, .08);
+      width: 600px;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 12px;
+      text-align: center;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    input[name="ssid"] {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+  </style>
+  <script>
+    async function kvmAction(port) {
+      const n = document.getElementById("notif");
+      n.textContent = "Switching KVM…";
+      try {
+        const r = await fetch("/kvm", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: `port=${encodeURIComponent(port)}` });
+        n.textContent = r.ok ? "KVM switched" : "KVM failed";
+      } catch { n.textContent = "KVM failed"; }
+      setTimeout(() => n.textContent = "", 3000);
+    }
+
+    async function doAction(pc, t, el) {
+      const n = document.getElementById("notif");
+      const label = el.getAttribute("data-label") || `PC ${pc}`;
+      n.textContent = `${label} ${t}…`;
+      try {
+        const r = await fetch("/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `pc=${encodeURIComponent(pc)}&type=${encodeURIComponent(t)}`
+        });
+        n.textContent = r.ok ? `${label} ${t} ok` : `${label} ${t} failed`;
+      } catch {
+        n.textContent = `${label} ${t} failed`;
+      }
+      setTimeout(() => n.textContent = "", 3000);
+      refreshStatus();
+    }
+
+    async function updateLabel(pc) {
+      const v = document.getElementById("label" + pc).value;
+      try {
+        await fetch("/setlabel", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `pc=${encodeURIComponent(pc)}&name=${encodeURIComponent(v)}`
+        });
+      } catch { }
+    }
+
+    async function refreshStatus() {
+      try {
+        const r = await fetch("/status");
+        if (!r.ok) return;
+        const j = await r.json();
+        for (const pc in j) {
+          const s = j[pc];
+          const le = document.getElementById("led" + pc);
+          const br = document.getElementById("bravo" + pc);
+          if (le) le.textContent = s.led;
+          if (br) br.textContent = s.bravo;
+        }
+      } catch { }
+    }
+    setInterval(refreshStatus, 2000);
+    window.onload = refreshStatus;
+
+  </script>
+</head>
+
+<body>
+  <h1>Out-of-Band Management</h1>
+  <div id="notif"></div>
+
+  ##PC_CARDS##
+
+  <div class="section">
+    <h3>Recent Log</h3>
+    <pre id="logbox"
+      style="height:120px;overflow:auto;background:#f9f9f9;border-radius:8px;padding:8px;font-size:12px"></pre>
+    <button onclick="refreshLog()" class="btn-rst">Refresh Log</button>
+  </div>
+  <script>
+    async function refreshLog() {
+      try {
+        const r = await fetch("/log");
+        if (!r.ok) return;
+        document.getElementById("logbox").textContent = await r.text();
+      } catch { }
+    }
+    setInterval(refreshLog, 4000);
+    window.onload = function () {
+      refreshStatus();
+      refreshLog();
+    };
+  </script>
+
+  <div class="section">
+    <h3>Wi-Fi Settings</h3>
+    <form method="POST" action="/setwifi">
+      <input name="ssid" value="##SSID##" placeholder="SSID" autocomplete="off"><br><br>
+      <input type="password" name="psk" value="##PSK##" placeholder="Password" autocomplete="off"><br><br>
+      <button type="submit" class="btn-on">Save & Reboot</button>
+    </form>
+  </div>
+
+  <div class="muted">Version: ##VERSION##</div>
+</body>
+
+</html>

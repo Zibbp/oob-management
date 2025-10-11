@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP AQY282EH
+D PANASONIC - AQY282EH - SSR, PCB MOSFET, SPST-NO, 500mA, 1.8mA
+K
+F https://media.digikey.com/pdf/Data%20Sheets/Panasonic%20Electric%20Works%20PDFs/AQW,AQY280,282,284.pdf
+$ENDCMP
+#
+#End Doc Library
