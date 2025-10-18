@@ -114,7 +114,8 @@
 
     input[type="text"],
     input[type="password"],
-    input[name="ssid"] {
+    input[name="ssid"],
+    input[name="user"] {
       width: 100%;
       padding: 8px;
       border: 1px solid #ddd;
@@ -207,6 +208,15 @@
       refreshLog();
     };
   </script>
+
+  <div class="section">
+    <h3>Change Login Credentials</h3>
+    <form method="POST" action="/setauth">
+      <input name="user" placeholder="Username" autocomplete="off"><br><br>
+      <input type="password" name="pass" placeholder="Password" autocomplete="off"><br><br>
+      <button type="submit" class="btn-on">Save & Reboot</button>
+    </form>
+  </div>
 
   <div class="section">
     <h3>Wi-Fi Settings</h3>

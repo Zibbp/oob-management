@@ -40,6 +40,55 @@ if FORCE_WIFI_OVERWRITE_NVS and FORCE_WIFI_SSID:
     except Exception:
         pass  # allow AP fallback
 
+# ========= Auth =========
+AUTH_NVS = esp32.NVS("auth")
+DEFAULT_USER = "oob"
+DEFAULT_PASS = "oob"
+
+def get_auth_creds():
+    """Return (user, pass) from NVS or defaults."""
+    try:
+        buf_u = bytearray(32)
+        buf_p = bytearray(32)
+        lu = AUTH_NVS.get_blob("user", buf_u)
+        lp = AUTH_NVS.get_blob("pass", buf_p)
+        user = buf_u[:lu].decode() if lu else DEFAULT_USER
+        pw   = buf_p[:lp].decode() if lp else DEFAULT_PASS
+        return user, pw
+    except Exception:
+        return DEFAULT_USER, DEFAULT_PASS
+
+def set_auth_creds(user, pw):
+    AUTH_NVS.set_blob("user", user.encode())
+    AUTH_NVS.set_blob("pass", pw.encode())
+    AUTH_NVS.commit()
+
+def check_basic_auth(headers):
+    """Return True if Authorization header matches stored creds."""
+    auth = headers.get("authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        b64 = auth[6:]
+        raw = ubinascii.a2b_base64(b64).decode()
+        user, pw = raw.split(":", 1)
+        stored_user, stored_pw = get_auth_creds()
+        return user == stored_user and pw == stored_pw
+    except Exception:
+        return False
+
+def send_unauth(cl):
+    """Send 401 Unauthorized response."""
+    try:
+        cl.sendall(
+            b"HTTP/1.1 401 Unauthorized\r\n"
+            b"WWW-Authenticate: Basic realm=\"OOB\"\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"Content-Length: 12\r\n\r\nUnauthorized"
+        )
+    except Exception:
+        pass
+
 # ==== Logging ====
 LOG_BUF = []
 LOG_BUF_MAX = 50
@@ -496,6 +545,13 @@ while True:
         params.update(query)
         params.update(form)
 
+        # Allow unauthenticated access only to /setwifi in setup mode
+        if not (SETUP_MODE and route == "/setwifi"):
+            if not check_basic_auth(headers):
+                send_unauth(cl)
+                cl.close()
+                continue
+
         if method == "GET" and route == "/":
             page = render_main_page().encode()
             send_resp(cl, 200, "text/html; charset=utf-8", page)
@@ -568,6 +624,21 @@ while True:
                 machine.reset()
             else:
                 send_resp(cl, 400, "text/plain; charset=utf-8", b"Missing SSID")
+
+        elif method == "POST" and route == "/setauth":
+            user = params.get("user", "")
+            pw   = params.get("pass", "")
+            if user and pw:
+                set_auth_creds(user, pw)
+                send_resp(cl, 200, "text/plain; charset=utf-8", b"Auth updated! Rebooting...")
+                try: cl.close()
+                except: pass
+                _fsync()
+                time.sleep(1.5)
+                log("Rebooting for auth update...")
+                machine.reset()
+            else:
+                send_resp(cl, 400, "text/plain; charset=utf-8", b"Missing user/pass")
 
         else:
             # Uncomment to log unknown routes

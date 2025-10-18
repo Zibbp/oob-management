@@ -83,6 +83,8 @@ Web UI image:
   - Name: `OOB-Setup-XXXX`
   - Password: `oobsetup1`
   - Web page: `192.168.4.1`
+- Basic authentication
+  - Default username and password is `oob`
 
 ## Summary
 
