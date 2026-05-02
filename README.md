@@ -1,5 +1,9 @@
 # Out-of-Band Management
 
+## Version 2
+
+See the `v2/` directory for the second version of this project. It replaces the esp32 with a Raspberry PI Pico (rp2040) with a W5500 for Ethernet.
+
 ## Story
 
 I do not use any enterprise servers in my homelab, instead primarly consumer parts. Rarely do any consumer or prosumer boards have OOB/IPMI except for some overpriced Asrock boards, so I have no true out-of-band management like IPMI/ILO/etc. I do have an IP-KVM which provides video, HID, and ATX power control for a *single* computer. I need this for many computers, which sent me down the rabbit hole of designing this.
