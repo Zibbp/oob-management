@@ -14,7 +14,16 @@ except ImportError:
     import binascii
 
 import network
-from machine import I2C, Pin, SPI, UART
+import machine
+from machine import I2C, Pin, SPI
+
+try:
+    from rp2 import PIO, StateMachine, asm_pio
+except ImportError:
+    PIO = None
+    StateMachine = None
+    asm_pio = None
+
 
 APP_NAME = "OOB Management"
 APP_VERSION = "2.0.0-pico"
@@ -22,7 +31,16 @@ HOSTNAME = "oob-pico"
 HTTP_PORT = 80
 DHCP_TIMEOUT_SECONDS = 30
 HTTP_CLIENT_TIMEOUT_SECONDS = 2
+HTTP_ACCEPT_TIMEOUT_SECONDS = 1
 HTTP_MAX_REQUEST_BYTES = 8192
+
+OTA_ENABLED = True
+OTA_MAX_BYTES = 96 * 1024
+OTA_MAIN_FILE = "main.py"
+OTA_UPLOAD_FILE = "main.py.upload"
+OTA_BACKUP_FILE = "main.py.bak"
+OTA_PENDING_FILE = "ota_pending.json"
+OTA_BOOTING_FILE = "ota_booting"
 
 # Set AUTH_ENABLED to False if this controller lives on a fully isolated network.
 AUTH_ENABLED = True
@@ -44,11 +62,10 @@ MCP_PIN_SCL = 3
 MCP_ADDR = 0x20
 MCP_I2C_FREQ = 100000
 
-# Optional serial/KVM link.
-KVM_UART_ID = 1
+# Optional transmit-only serial/KVM link using RP2040 PIO.
+KVM_PIO_SM_ID = 0
 KVM_UART_BAUD = 19200
-KVM_PIN_TX = 4
-KVM_PIN_RX = 5
+KVM_PIN_TX = 5
 
 # Controller status LED.
 POWER_LED_PIN = 6
@@ -118,11 +135,69 @@ LOG_MAX_ENTRIES = 80
 LOG_MAX_LINE_CHARS = 160
 
 
+if asm_pio:
+
+    @asm_pio(
+        sideset_init=PIO.OUT_HIGH, out_init=PIO.OUT_HIGH, out_shiftdir=PIO.SHIFT_RIGHT
+    )
+    def pio_uart_tx():
+        pull()
+        set(x, 7).side(0)[7]
+        label("bitloop")
+        out(pins, 1)[6]
+        jmp(x_dec, "bitloop")
+        nop().side(1)[6]
+
+else:
+    pio_uart_tx = None
+
+
 log_lines = []
 labels = {}
 nic = None
+try:
+    OTA_WDT
+except NameError:
+    OTA_WDT = None
 controller_led = Pin(POWER_LED_PIN, Pin.OUT)
 controller_led.on()
+
+
+def feed_watchdog():
+    if OTA_WDT:
+        try:
+            OTA_WDT.feed()
+        except Exception:
+            pass
+
+
+def sleep_with_watchdog(seconds):
+    milliseconds = int(seconds * 1000)
+    if milliseconds <= 0:
+        feed_watchdog()
+        return
+
+    deadline = time.ticks_add(time.ticks_ms(), milliseconds)
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        feed_watchdog()
+        remaining = time.ticks_diff(deadline, time.ticks_ms())
+        time.sleep_ms(min(1000, max(1, remaining)))
+    feed_watchdog()
+
+
+def file_exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
+
+def remove_file(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def log(message):
@@ -168,6 +243,7 @@ def has_ipv4_address(iface):
 
 
 def connect_w5500_dhcp():
+    feed_watchdog()
     log("Starting W5500 Ethernet")
     spi = SPI(
         W5500_SPI_ID,
@@ -180,6 +256,7 @@ def connect_w5500_dhcp():
     )
 
     iface = network.WIZNET5K(spi, Pin(W5500_PIN_CS), Pin(W5500_PIN_RST))
+    feed_watchdog()
 
     try:
         network.hostname(HOSTNAME)
@@ -187,6 +264,7 @@ def connect_w5500_dhcp():
         pass
 
     iface.active(True)
+    feed_watchdog()
 
     try:
         iface.ipconfig(dhcp4=True)
@@ -196,6 +274,7 @@ def connect_w5500_dhcp():
 
     deadline = time.time() + DHCP_TIMEOUT_SECONDS
     while time.time() < deadline:
+        feed_watchdog()
         if iface.isconnected() and has_ipv4_address(iface):
             ip, subnet, gateway, dns = get_ipv4_config(iface)
             log(
@@ -206,7 +285,7 @@ def connect_w5500_dhcp():
             return iface
 
         log("Waiting for Ethernet link/DHCP")
-        time.sleep(1)
+        sleep_with_watchdog(1)
 
     log("Ethernet link up: {}".format(iface.isconnected()))
     log("Network config: {}".format(get_ipv4_config(iface)))
@@ -227,7 +306,9 @@ class MCP23017:
         return self.i2c.readfrom_mem(self.address, reg, 1)[0]
 
     def begin(self):
+        feed_watchdog()
         found = self.i2c.scan()
+        feed_watchdog()
         if self.address not in found:
             mcp_addresses = []
             for address in found:
@@ -260,11 +341,13 @@ class MCP23017:
                 input_mask_b |= mask
 
         self.write_reg(OLATA, 0x00)
+        feed_watchdog()
         self.write_reg(OLATB, 0x00)
         self.write_reg(IODIRA, input_mask_a)
         self.write_reg(IODIRB, input_mask_b)
         self.write_reg(GPPUA, input_mask_a)
         self.write_reg(GPPUB, input_mask_b)
+        feed_watchdog()
         log(
             "MCP23017 ready: IODIRA=0x{:02X} IODIRB=0x{:02X}".format(
                 input_mask_a, input_mask_b
@@ -293,26 +376,50 @@ class MCP23017:
         self.write_reg(self.olat_reg(bank), self.output_latch[bank])
 
     def pulse(self, bank, bit, seconds):
+        feed_watchdog()
         self.set_output(bank, bit, True)
-        time.sleep(seconds)
+        sleep_with_watchdog(seconds)
         self.set_output(bank, bit, False)
+        feed_watchdog()
 
 
 def make_mcp():
+    feed_watchdog()
     bus_name = "I2C{} SDA=GPIO{} SCL=GPIO{} freq={}".format(
         MCP_I2C_ID, MCP_PIN_SDA, MCP_PIN_SCL, MCP_I2C_FREQ
     )
     i2c = I2C(MCP_I2C_ID, scl=Pin(MCP_PIN_SCL), sda=Pin(MCP_PIN_SDA), freq=MCP_I2C_FREQ)
     expander = MCP23017(i2c, MCP_ADDR, bus_name)
     expander.begin()
+    feed_watchdog()
     return expander
 
 
-def make_kvm_uart():
-    try:
-        return UART(
-            KVM_UART_ID, baudrate=KVM_UART_BAUD, tx=Pin(KVM_PIN_TX), rx=Pin(KVM_PIN_RX)
+class PioUartTx:
+    def __init__(self, state_machine_id, pin, baudrate):
+        if not (PIO and StateMachine and pio_uart_tx):
+            raise RuntimeError("RP2040 PIO is not available")
+        tx_pin = Pin(pin)
+        self.sm = StateMachine(
+            state_machine_id,
+            pio_uart_tx,
+            freq=8 * baudrate,
+            sideset_base=tx_pin,
+            out_base=tx_pin,
         )
+        self.sm.active(1)
+
+    def write(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        for byte in data:
+            self.sm.put(byte)
+
+
+def make_kvm_uart():
+    feed_watchdog()
+    try:
+        return PioUartTx(KVM_PIO_SM_ID, KVM_PIN_TX, KVM_UART_BAUD)
     except Exception as exc:
         log("KVM UART disabled: {}".format(exc))
         return None
@@ -447,16 +554,24 @@ def split_path_query(path):
     return route, parse_kv_pairs(query)
 
 
-def read_request(client):
+def parse_content_length(headers):
+    try:
+        return int(headers.get("content-length", "0") or "0")
+    except Exception:
+        raise ValueError("Invalid Content-Length")
+
+
+def read_request_start(client):
     client.settimeout(HTTP_CLIENT_TIMEOUT_SECONDS)
     data = b""
     while b"\r\n\r\n" not in data:
+        feed_watchdog()
         chunk = client.recv(1024)
         if not chunk:
             break
         data += chunk
         if len(data) > HTTP_MAX_REQUEST_BYTES:
-            break
+            raise ValueError("Request headers too large")
 
     head, _, rest = data.partition(b"\r\n\r\n")
     lines = head.split(b"\r\n")
@@ -474,25 +589,180 @@ def read_request(client):
             key, value = line.split(b":", 1)
             headers[key.decode().strip().lower()] = value.decode().strip()
 
-    length = int(headers.get("content-length", "0") or "0")
-    body = rest
+    return method, path, headers, rest
+
+
+def read_request_body(client, headers, initial_body, max_bytes=HTTP_MAX_REQUEST_BYTES):
+    length = parse_content_length(headers)
+    if length > max_bytes:
+        raise ValueError("Request body too large")
+
+    body = initial_body[:length]
     while len(body) < length:
-        chunk = client.recv(length - len(body))
+        feed_watchdog()
+        chunk = client.recv(min(1024, length - len(body)))
         if not chunk:
             break
         body += chunk
 
-    return method, path, headers, body
+    if len(body) != length:
+        raise ValueError("Incomplete request body")
+
+    return body
+
+
+def stream_request_body_to_file(client, headers, initial_body, path, max_bytes):
+    length = parse_content_length(headers)
+    if length <= 0:
+        raise ValueError("Upload is empty")
+    if length > max_bytes:
+        raise ValueError("Upload is too large")
+
+    written = 0
+    with open(path, "wb") as f:
+        if initial_body:
+            chunk = initial_body[:length]
+            f.write(chunk)
+            written += len(chunk)
+            feed_watchdog()
+
+        while written < length:
+            feed_watchdog()
+            chunk = client.recv(min(1024, length - written))
+            if not chunk:
+                raise ValueError("Upload ended early")
+            f.write(chunk)
+            written += len(chunk)
+
+    sync_filesystem()
+    return written
+
+
+def validate_ota_upload(path):
+    feed_watchdog()
+    gc.collect()
+    source = None
+    code = None
+    try:
+        with open(path, "r") as f:
+            source = f.read()
+        feed_watchdog()
+        code = compile(source, OTA_MAIN_FILE, "exec")
+        feed_watchdog()
+    except Exception as exc:
+        raise ValueError("Upload validation failed: {}".format(exc))
+    finally:
+        try:
+            del code
+        except Exception:
+            pass
+        try:
+            del source
+        except Exception:
+            pass
+        gc.collect()
+
+
+def write_ota_pending(size, remote):
+    payload = {
+        "file": OTA_MAIN_FILE,
+        "backup": OTA_BACKUP_FILE,
+        "size": size,
+        "remote": remote,
+        "version": APP_VERSION,
+        "ticks_ms": time.ticks_ms(),
+    }
+    with open(OTA_PENDING_FILE, "w") as f:
+        f.write(json.dumps(payload))
+    sync_filesystem()
+
+
+def install_ota_upload(size, remote):
+    main_moved = False
+    try:
+        remove_file(OTA_BACKUP_FILE)
+        write_ota_pending(size, remote)
+        os.rename(OTA_MAIN_FILE, OTA_BACKUP_FILE)
+        main_moved = True
+        os.rename(OTA_UPLOAD_FILE, OTA_MAIN_FILE)
+        sync_filesystem()
+    except Exception:
+        if (
+            main_moved
+            and file_exists(OTA_BACKUP_FILE)
+            and not file_exists(OTA_MAIN_FILE)
+        ):
+            try:
+                os.rename(OTA_BACKUP_FILE, OTA_MAIN_FILE)
+            except Exception:
+                pass
+        remove_file(OTA_PENDING_FILE)
+        remove_file(OTA_BOOTING_FILE)
+        sync_filesystem()
+        raise
+
+
+def clear_ota_markers_if_healthy():
+    if not (file_exists(OTA_PENDING_FILE) or file_exists(OTA_BOOTING_FILE)):
+        return
+    remove_file(OTA_PENDING_FILE)
+    remove_file(OTA_BOOTING_FILE)
+    sync_filesystem()
+    log("OTA boot accepted; HTTP server is listening")
+
+
+def handle_ota_update(client, headers, initial_body, remote):
+    if not OTA_ENABLED:
+        response(client, 403, "text/plain; charset=utf-8", "OTA updates disabled\n")
+        return
+
+    remove_file(OTA_UPLOAD_FILE)
+    try:
+        log("OTA upload started from {}".format(remote))
+        size = stream_request_body_to_file(
+            client, headers, initial_body, OTA_UPLOAD_FILE, OTA_MAX_BYTES
+        )
+        validate_ota_upload(OTA_UPLOAD_FILE)
+        install_ota_upload(size, remote)
+    except ValueError as exc:
+        remove_file(OTA_UPLOAD_FILE)
+        log("OTA upload rejected from {}: {}".format(remote, exc))
+        response(client, 400, "text/plain; charset=utf-8", "{}\n".format(exc))
+        return
+    except Exception as exc:
+        remove_file(OTA_UPLOAD_FILE)
+        log("OTA upload failed from {}: {}".format(remote, exc))
+        raise
+
+    log("OTA update installed from {}: {} bytes; rebooting".format(remote, size))
+    json_response(client, {"ok": True, "size": size, "rebooting": True})
+    sleep_with_watchdog(0.3)
+    machine.reset()
+
+
+def is_socket_timeout(exc):
+    if isinstance(exc, OSError) and exc.args:
+        return exc.args[0] in (11, 110, 116)
+    return False
+
+
+def read_request(client):
+    method, path, headers, rest = read_request_start(client)
+    if not method:
+        return "", "", {}, b""
+    return method, path, headers, read_request_body(client, headers, rest)
 
 
 def send_all(client, data):
     view = memoryview(data)
     sent = 0
     while sent < len(view):
+        feed_watchdog()
         n = client.send(view[sent:])
         if n == 0:
             raise RuntimeError("socket connection broken")
         sent += n
+    feed_watchdog()
 
 
 def response(client, code, content_type, body, headers=None):
@@ -860,6 +1130,50 @@ def index_page():
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }}
+    .update-panel {{
+      margin-top: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }}
+    .update-panel header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #171c23;
+    }}
+    .update-panel h2 {{
+      margin: 0;
+      font-size: 15px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }}
+    .update-row {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 14px;
+      align-items: center;
+    }}
+    .update-row input {{
+      width: 100%;
+      min-width: 0;
+      color: var(--text);
+      border: 1px solid var(--line);
+      background: #0f1216;
+      border-radius: 6px;
+      padding: 9px;
+    }}
+    .update-status {{
+      min-height: 18px;
+      padding: 0 14px 14px;
+      color: var(--muted);
+      font-size: 13px;
+    }}
     .footer {{
       margin-top: 18px;
       display: flex;
@@ -889,7 +1203,7 @@ def index_page():
     @media (max-width: 620px) {{
       .topbar {{ align-items: flex-start; flex-direction: column; }}
       .net {{ justify-content: flex-start; }}
-      .signals, .actions {{ grid-template-columns: 1fr; }}
+      .signals, .actions, .update-row {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -916,6 +1230,17 @@ def index_page():
       </header>
       <pre class="log-lines" id="log-lines">Loading...</pre>
     </section>
+    <section class="update-panel" aria-labelledby="update-title">
+      <header>
+        <h2 id="update-title">Update main.py</h2>
+        <span class="log-count">Rollback protected</span>
+      </header>
+      <div class="update-row">
+        <input id="update-file" type="file" accept=".py,text/x-python" aria-label="Select main.py update">
+        <button id="update-button" type="button">Upload and reboot</button>
+      </div>
+      <div class="update-status" id="update-status">No update selected.</div>
+    </section>
     <div class="footer">
       <span>{version}</span>
       <span id="heap">Heap: --</span>
@@ -939,6 +1264,39 @@ def index_page():
       }});
       if (!res.ok) throw new Error(await res.text());
       return res.text();
+    }}
+    async function uploadUpdate() {{
+      const input = document.getElementById('update-file');
+      const button = document.getElementById('update-button');
+      const status = document.getElementById('update-status');
+      const file = input.files && input.files[0];
+      if (!file) {{
+        status.textContent = 'Choose a main.py file first.';
+        return;
+      }}
+      if (!file.name.toLowerCase().endsWith('.py')) {{
+        status.textContent = 'Choose a Python .py file.';
+        return;
+      }}
+      setBusy(button, true);
+      status.textContent = 'Uploading ' + file.name + '...';
+      try {{
+        const res = await fetch('/update', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'text/x-python'}},
+          body: file
+        }});
+        const text = await res.text();
+        if (!res.ok) throw new Error(text.trim() || 'Upload failed');
+        status.textContent = 'Update accepted. Rebooting...';
+        notify('Update installed; rebooting');
+      }} catch (err) {{
+        status.textContent = 'Update failed: ' + err.message;
+        notify('Update failed');
+        refreshLog().catch(() => {{}});
+      }} finally {{
+        setBusy(button, false);
+      }}
     }}
     function setBusy(button, busy) {{
       if (!button) return;
@@ -997,7 +1355,8 @@ def index_page():
         }});
       }});
       card.querySelector('[data-kvm]').addEventListener('click', async event => {{
-        setBusy(event.currentTarget, true);
+        const button = event.currentTarget;
+        setBusy(button, true);
         try {{
           await post('/kvm', {{port: pc}});
           notify('KVM switched');
@@ -1006,7 +1365,7 @@ def index_page():
           notify('KVM failed: ' + err.message);
           refreshLog().catch(() => {{}});
         }} finally {{
-          setBusy(event.currentTarget, false);
+          setBusy(button, false);
         }}
       }});
       const input = card.querySelector('.label-input');
@@ -1021,6 +1380,7 @@ def index_page():
         }}
       }});
     }});
+    document.getElementById('update-button').addEventListener('click', uploadUpdate);
     refresh();
     refreshLog().catch(() => {{}});
     setInterval(refresh, 2500);
@@ -1037,21 +1397,35 @@ def index_page():
 
 
 def handle_request(client, remote_addr=None):
-    method, path_raw, headers, body = read_request(client)
+    method, path_raw, headers, initial_body = read_request_start(client)
     if not method:
         return
 
     remote = remote_label(remote_addr)
     route, query = split_path_query(path_raw)
-    form = parse_kv_pairs(body.decode() if body else "")
-    params = {}
-    params.update(query)
-    params.update(form)
 
     if route != "/health" and not check_auth(headers):
         log("Auth failed for {} {} from {}".format(method, route, remote))
         unauthorized(client)
         return
+
+    if method == "POST" and route == "/update":
+        handle_ota_update(client, headers, initial_body, remote)
+        return
+
+    body = b""
+    if method in ("POST", "PUT", "PATCH"):
+        try:
+            body = read_request_body(client, headers, initial_body)
+        except ValueError as exc:
+            log("Invalid request body from {}: {}".format(remote, exc))
+            response(client, 400, "text/plain; charset=utf-8", "{}\n".format(exc))
+            return
+
+    form = parse_kv_pairs(body.decode() if body else "")
+    params = {}
+    params.update(query)
+    params.update(form)
 
     if method == "GET" and route in ("/", "/index.html"):
         log("Web UI opened from {}".format(remote))
@@ -1143,6 +1517,7 @@ def handle_request(client, remote_addr=None):
 
 
 def serve_http():
+    feed_watchdog()
     ip, _, _, _ = get_ipv4_config(nic)
     addr = socket.getaddrinfo("0.0.0.0", HTTP_PORT)[0][-1]
     server = socket.socket()
@@ -1153,12 +1528,36 @@ def serve_http():
     server.bind(addr)
     server.listen(8)
     log("HTTP listening on http://{}:{}/".format(ip, HTTP_PORT))
+    clear_ota_markers_if_healthy()
+    try:
+        server.settimeout(HTTP_ACCEPT_TIMEOUT_SECONDS)
+    except Exception:
+        pass
 
     while True:
+        feed_watchdog()
         client = None
         try:
             client, remote_addr = server.accept()
+            feed_watchdog()
             handle_request(client, remote_addr)
+        except OSError as exc:
+            if is_socket_timeout(exc) and client is None:
+                continue
+            if is_client_disconnect(exc):
+                log("HTTP client disconnected")
+            else:
+                log("HTTP error: {}".format(exc))
+                try:
+                    if client:
+                        response(
+                            client,
+                            500,
+                            "text/plain; charset=utf-8",
+                            "ERR: {}\n".format(exc),
+                        )
+                except Exception:
+                    pass
         except Exception as exc:
             if is_client_disconnect(exc):
                 log("HTTP client disconnected")
