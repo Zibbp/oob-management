@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OOB Management</title>
+<style>
+:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--panel2:#1c2128;--line:#2d333b;--text:#e6edf3;--muted:#8b949e;--accent:#2f81f7;--ok:#3fb950;--bad:#f85149}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+[hidden]{display:none!important}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px}.mark{background:var(--accent);color:#fff;font-weight:800;font-size:13px;letter-spacing:.08em;padding:3px 8px;border-radius:6px}
+.name{font-weight:600;font-size:15px}
+.status{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel2);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--muted)}
+.pill b{color:var(--text);font-weight:600}.pill.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.dot.on{background:var(--ok);box-shadow:0 0 6px rgba(63,185,80,.7)}.dot.off{background:var(--bad)}
+.switch{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:var(--panel2);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none}
+.switch input{accent-color:var(--accent);margin:0}
+main{padding:20px clamp(16px,4vw,40px) 32px;max-width:1080px;margin:0 auto}
+.sech{display:flex;align-items:center;gap:12px;margin:22px 0 12px}
+.sech:first-child{margin-top:0}
+.sech h2{margin:0;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.sech::after{content:"";flex:1;height:1px;background:var(--line)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:8px;padding:14px}
+.card.on{border-left-color:var(--ok)}
+.chead{display:flex;align-items:center;gap:9px}
+.chead .dot{width:10px;height:10px}
+.nm{flex:1;min-width:0;background:transparent;border:0;border-bottom:1px solid transparent;color:var(--text);font-size:15px;font-weight:650;padding:1px 0}
+.nm:focus{outline:0;border-bottom-color:var(--accent)}
+.state{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;flex:none}
+.state.on{color:var(--ok)}.state.off{color:var(--bad)}
+.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+.meta>div{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 10px}
+.meta dt{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.meta dd{margin:2px 0 0;font-size:14px;font-weight:600}
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+button{min-height:36px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--text);font-size:13px;font-weight:600;cursor:pointer}
+button:hover{border-color:var(--muted)}button:disabled{opacity:.55;cursor:wait}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{filter:brightness(1.1)}
+button.danger{background:transparent;border-color:var(--bad);color:var(--bad)}
+button.danger:hover{background:rgba(248,81,73,.1)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px}
+.panel header{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:var(--panel2);border-bottom:1px solid var(--line)}
+.panel h3{margin:0;font-size:13px;font-weight:650}
+.count{font-size:11px;color:var(--muted)}
+.panel .body{padding:14px}
+pre.log{margin:0;max-height:300px;overflow:auto;background:#0a0d12;padding:12px 14px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#c9d1d9;white-space:pre-wrap;overflow-wrap:anywhere}
+.frow{display:flex;gap:8px;flex-wrap:wrap}
+.frow input[type=text],.frow input[type=password]{flex:1;min-width:180px;background:#0a0d12;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px}
+.frow input:focus{outline:0;border-color:var(--accent)}
+.frow button{flex:none;padding:0 18px}
+.hint{color:var(--muted);font-size:12px;margin:8px 0 0}
+footer{display:flex;justify-content:space-between;color:var(--muted);font-size:12px;margin-top:16px;flex-wrap:wrap;gap:8px}
+#toast{position:fixed;right:16px;bottom:16px;max-width:min(360px,90vw);background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:10px 14px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+@media(max-width:600px){.btns{grid-template-columns:1fr}.frow button{flex:1}}
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><span class="mark">OOB</span><span class="name" id="hostname">…</span></div>
+  <div class="status">
+    <span class="pill" id="ver">…</span>
+    <label class="switch"><input type="checkbox" id="serialToggle"><span>Serial</span></label>
+  </div>
+</header>
+<main>
+  <div class="sech"><h2>Systems</h2></div>
+  <section class="grid" id="grid"></section>
+  <div class="sech"><h2>Logs</h2></div>
+  <section class="panel"><header><h3>Activity</h3><span class="count" id="logcount">…</span></header><pre class="log" id="log">Loading…</pre></section>
+  <section class="panel" id="serialPanel" hidden><header><h3>Device serial</h3><span class="count" id="serialcount">…</span></header><pre class="log" id="serial">Loading…</pre><div class="body">
+    <div class="frow"><input id="serialIn" type="text" maxlength="200" placeholder="Send to device…" aria-label="Send to device"><button id="serialSend">Send</button><button id="serialClear">Clear</button></div>
+  </div></section>
+  <div class="sech"><h2>Settings</h2></div>
+  <section class="panel"><header><h3>Access</h3></header><div class="body">
+    <div class="frow"><input id="user" type="text" maxlength="32" placeholder="Username" aria-label="Username"><input id="pass" type="password" maxlength="64" placeholder="New password" aria-label="New password"><button id="authbtn">Save</button></div>
+    <p class="hint">Takes effect immediately and survives reboot.</p>
+  </div></section>
+  <footer><span id="foot">…</span><span id="pollnote"></span></footer>
+</main>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');clearTimeout(window._tt);window._tt=setTimeout(()=>t.classList.remove('show'),2200)}
+async function post(route,data){const r=await fetch(route,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(data)});if(!r.ok)throw new Error(await r.text());return r.text()}
+function card(pc){
+  const el=document.createElement('article');el.className='card'+(pc.power_on?' on':'');
+  el.innerHTML=`<div class="chead"><span class="dot"></span><input class="nm" type="text" maxlength="32" value=""><span class="state">…</span></div>
+  <dl class="meta"><div><dt>Power LED</dt><dd class="led">–</dd></div><div><dt>Aux input</dt><dd class="aux">–</dd></div></dl>
+  <div class="btns"><button class="primary" data-a="power">Power</button><button data-a="reset">Reset</button>
+  <button class="danger" data-a="force_off">Hold 5s</button><button data-kvm>KVM</button></div>`;
+  const inp=el.querySelector('.nm');inp.value=pc.label;inp.title='Rename system '+pc.id;
+  inp.addEventListener('change',async()=>{try{await post('/label',{pc:pc.id,name:inp.value});toast('Label saved')}catch(e){toast('Label failed')}});
+  el.querySelectorAll('[data-a]').forEach(b=>b.addEventListener('click',async()=>{
+    if(b.dataset.a==='force_off'&&!confirm('Hold the power button for 5 seconds (force off)?'))return;
+    b.disabled=true;try{await post('/action',{pc:pc.id,action:b.dataset.a});toast('Command sent');await refresh()}catch(e){toast('Command failed: '+e.message)}b.disabled=false}));
+  el.querySelector('[data-kvm]').addEventListener('click',async e=>{const b=e.currentTarget;b.disabled=true;try{await post('/kvm',{port:pc.id});toast('KVM switched')}catch(err){toast('KVM failed')}b.disabled=false});
+  el._set=st=>{el.classList.toggle('on',st.power_on);
+    const dot=el.querySelector('.dot');dot.classList.toggle('on',st.power_on);dot.classList.toggle('off',!st.power_on);
+    const badge=el.querySelector('.state');badge.textContent=st.power_on?'On':'Off';badge.classList.toggle('on',st.power_on);badge.classList.toggle('off',!st.power_on);
+    el.querySelector('.led').textContent=st.power_on?'On':'Off';
+    el.querySelector('.aux').textContent=st.aux_on?'Connected':'—';
+    if(document.activeElement!==inp)inp.value=st.label};
+  el._set(pc);el.dataset.pc=pc.id;return el;
+}
+async function get(route){for(let i=0;i<2;i++){try{const r=await fetch(route);if(!r.ok)throw new Error(r.status);return r}catch(e){if(i)return null;await new Promise(s=>setTimeout(s,400))}}return null}
+async function refresh(){const r=await get('/status');if(!r)return;let d;try{d=await r.json()}catch(e){return}
+  $('hostname').textContent=d.hostname||'oob';
+  $('ver').textContent=d.version;$('foot').textContent=d.app+' '+d.version;
+  const g=$('grid');const map={};g.querySelectorAll('.card').forEach(c=>map[c.dataset.pc]=c);
+  for(const pc of d.pcs){if(map[pc.id])map[pc.id]._set(pc);else g.appendChild(card(pc))}}
+async function refreshLog(){const r=await get('/log');if(!r)return;let t;try{t=await r.text()}catch(e){return}const box=$('log');box.textContent=t||'No entries yet.';box.scrollTop=box.scrollHeight;$('logcount').textContent=(t.trim()?t.trim().split('\n').length:0)+' entries'}
+async function refreshSerial(){const r=await get('/serial');if(!r)return;let t;try{t=await r.text()}catch(e){return}const box=$('serial');box.textContent=t||'No serial output yet.';box.scrollTop=box.scrollHeight;$('serialcount').textContent=(t.trim()?t.trim().split('\n').length:0)+' lines'}
+function applySerialToggle(){const on=$('serialToggle').checked;$('serialPanel').hidden=!on;try{localStorage.setItem('showSerial',on?'1':'0')}catch(e){}}
+$('serialToggle').addEventListener('change',()=>{applySerialToggle();if($('serialToggle').checked)refreshSerial()});
+$('serialSend').addEventListener('click',async()=>{const v=$('serialIn').value;if(!v)return;try{await post('/serial/send',{text:v+'\n'});$('serialIn').value='';refreshSerial()}catch(e){toast('Send failed: '+e.message)}});
+$('serialIn').addEventListener('keydown',e=>{if(e.key==='Enter')$('serialSend').click()});
+$('serialClear').addEventListener('click',async()=>{try{await post('/serial/clear',{});refreshSerial()}catch(e){toast('Clear failed')}});
+$('authbtn').addEventListener('click',async()=>{try{await post('/auth',{user:$('user').value,pass:$('pass').value});toast('Login saved');$('pass').value=''}catch(e){toast('Save failed: '+e.message)}});
+try{if(localStorage.getItem('showSerial')==='1')$('serialToggle').checked=true}catch(e){}
+applySerialToggle();
+refresh();setTimeout(refreshLog,800);setInterval(refresh,3000);setInterval(refreshLog,6000);setInterval(()=>{if($('serialToggle').checked)refreshSerial()},2000);
+</script>
+</body>
+</html>
